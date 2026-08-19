@@ -17,6 +17,14 @@ export ALOOF_TOKEN='alf_……'
 dsh web
 ```
 
+也可以直接从 GitHub 装，**建议钉住某个提交**，免得哪天一次推送悄悄改了你机器上跑的东西：
+
+```sh
+dsh plugin --profile web add 'github:gaochonggeng/dsh-aloof#<commit-sha>'
+```
+
+（这个插件是纯 JS、没有构建步骤，所以 git 安装不需要 `allowBuilds` 那道构建授权。）
+
 卸载 `dsh plugin --profile web remove dsh-aloof`，profile 的 `bundles` 列表会自动摘掉这一层。
 
 **私有部署必须先改 `baseUrl`**，见「配」——这一行填的是哪台，你的令牌就发给哪台。
