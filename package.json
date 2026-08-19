@@ -11,6 +11,14 @@
   ],
   "license": "MIT",
   "author": "Aloof",
+  "homepage": "https://github.com/gaochonggeng/dsh-aloof#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gaochonggeng/dsh-aloof.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gaochonggeng/dsh-aloof/issues"
+  },
   "type": "module",
   "main": "index.js",
   "exports": {

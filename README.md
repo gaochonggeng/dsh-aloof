@@ -82,6 +82,10 @@ dsh web
 
 **服务端那道**：Aloof 后端按令牌类型和路由白名单拦，非 GET 请求只有「提审批单」和「撤回自己的单」放行。所以 `oa_decide` 就算在本机被人点了同意，到了后端照样 403——「批准」这个动作不接受来自一张笔记本上的票。
 
+## 有问题
+
+提 [issue](https://github.com/gaochonggeng/dsh-aloof/issues)。这个插件只是个转发壳，业务逻辑（权限、数据范围、审批链、审计）全在 Aloof 后端——所以「它不让我批审批」这类不是插件的问题，见上面「票据」那节。
+
 ## 还没做
 
 - **没有设置页**：`baseUrl` / 令牌目前只能写 YAML 或环境变量。做成设置里的表单需要 `installSettingsSection` + schemastery，那就得引入运行时依赖。
