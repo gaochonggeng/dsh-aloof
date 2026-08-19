@@ -1,0 +1,33 @@
+{
+  "name": "dsh-aloof",
+  "version": "0.1.0",
+  "description": "把 Aloof 的办公审批接成 DeepSeek Harness 的原生工具：查待办、看可发起的审批、读表单字段、发起单子。写操作先过 dsh 的审批闸门。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "aloof",
+    "oa"
+  ],
+  "license": "MIT",
+  "author": "Aloof",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

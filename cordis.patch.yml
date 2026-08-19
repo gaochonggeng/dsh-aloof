@@ -1,0 +1,33 @@
+# dsh bundle patch —— 这个文件就是插件接进 profile 的全部接口。
+#
+# `dsh plugin add` 装完后，dsh 把本文件当成一个补丁层，追加在 dsh-base /
+# dsh-web-app 之后、用户自己的 cordis.patch.yml 之前。想改下面的配置，
+# 不要改这里（升级会覆盖）：在 profile 的 cordis.patch.yml 里按 id 覆盖，
+# 例如
+#
+#   - id: aloof
+#     name: 'dsh-aloof'
+#     config:
+#       baseUrl: https://aloof.你的公司.com
+#       tokenEnv: ALOOF_TOKEN
+#       timeoutMs: 20000
+#       requireApproval: true
+#
+# 注意 patch 是「整块替换 config」而不是深合并：覆盖时要把这四个键写全，
+# 少写 baseUrl 插件会直接报错退出（而不是悄悄连到别人的服务器上去）。
+- insert:
+    - id: aloof
+      name: 'dsh-aloof'
+      config:
+        # Aloof 后端地址。**私有部署必须改成你自己的域名**——这一行填的是哪台，
+        # 你的令牌就会发给哪台。下面这个是 Aloof 的托管实例。
+        baseUrl: https://inside.aloof-ai.cn
+        # 接入令牌从哪个凭据引用取。配置里存的是**引用名**，不是令牌本身：
+        # 值交给 dsh 的 credentials provider（进程环境变量 / $DSH_HOME/.credentials.yaml），
+        # 这样这份配置可以随便同步、随便渲染到界面上，换令牌也不用碰配置文件。
+        tokenEnv: ALOOF_TOKEN
+        # 单次 HTTP 超时（毫秒）。
+        timeoutMs: 20000
+        # 写操作（发起审批 / 同意 / 驳回）是否必须先问人。
+        # true = fail closed：没有可用的审批答复方就直接拒绝，不会静默放行。
+        requireApproval: true
