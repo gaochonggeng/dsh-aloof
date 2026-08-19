@@ -2,7 +2,7 @@
 
 把 [Aloof](https://inside.aloof-ai.cn) 的办公审批接成 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的**原生工具**：在自己电脑的 dsh 里直接说「我这个月的差旅报销提一下」「看看有什么等我批的」，不用切到浏览器。
 
-这同时是一份**可运行的 dsh 插件样板**——它把插件机制的每一层都用到了（工具注册、凭据服务、写操作审批闸门、结果渲染），三百行、没有一句 `import`（为什么见 `index.js` 顶部）。
+这同时是一份**可运行的 dsh 插件样板**——它把插件机制的每一层都用到了（工具注册、凭据服务、写操作审批闸门、结果渲染），单文件四百来行、没有一句 `import`（为什么见 `index.js` 顶部）。
 
 ## 装
 
