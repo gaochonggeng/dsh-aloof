@@ -8,20 +8,21 @@
 #   - id: aloof
 #     name: 'dsh-aloof'
 #     config:
-#       baseUrl: https://aloof.你的公司.com
 #       tokenEnv: ALOOF_TOKEN
 #       timeoutMs: 20000
 #       requireApproval: true
 #
-# 注意 patch 是「整块替换 config」而不是深合并：覆盖时要把这四个键写全，
-# 少写 baseUrl 插件会直接报错退出（而不是悄悄连到别人的服务器上去）。
+# 注意 patch 是「整块替换 config」而不是深合并：覆盖时要把键写全。
+#
+# **这里没有 baseUrl，这是故意的。** 地址跟着票一起来——Aloof 复制给你的是
+# `alf_xxxx@https://你那台` 一整串，插件从 @ 切开，前半截当密钥、后半截当地址。
+# 要是这个文件兜一个具体域名，装完没改的人的令牌就会发到那个域名去（那边只会回
+# 401，但票已经出网了）。只有反向代理 / 内网另有入口、网页地址和 dsh 能到达的地址
+# 确实不是同一个时，才在上面那段覆盖里补一行 baseUrl，填了以它为准。
 - insert:
     - id: aloof
       name: 'dsh-aloof'
       config:
-        # Aloof 后端地址。**私有部署必须改成你自己的域名**——这一行填的是哪台，
-        # 你的令牌就会发给哪台。下面这个是 Aloof 的托管实例。
-        baseUrl: https://inside.aloof-ai.cn
         # 接入令牌从哪个凭据引用取。配置里存的是**引用名**，不是令牌本身：
         # 值交给 dsh 的 credentials provider（进程环境变量 / $DSH_HOME/.credentials.yaml），
         # 这样这份配置可以随便同步、随便渲染到界面上，换令牌也不用碰配置文件。

@@ -18,12 +18,14 @@
 dsh plugin --profile web add dsh-aloof
 ```
 
-然后给它一张票（下一节说怎么拿）：
+然后把票粘进来就完事了（下一节说票从哪拿）：
 
 ```sh
-export ALOOF_TOKEN='alf_……'
+export ALOOF_TOKEN='alf_xxxx@https://aloof.你的公司.com'
 dsh web
 ```
+
+**只有这一个东西要配，没有第二项。** 票里 `@` 后面那截就是你公司那台 Aloof 的地址——密钥和它该发去哪台**绑在一起**，所以不存在「地址填串了、票发到别人服务器上」这回事。整串复制，别只粘前半截。
 
 也可以直接从 GitHub 装，**建议钉住某个提交**，免得哪天一次推送悄悄改了你机器上跑的东西：
 
@@ -34,8 +36,6 @@ dsh plugin --profile web add 'github:gaochonggeng/dsh-aloof#<commit-sha>'
 （这个插件是纯 JS、没有构建步骤，所以 git 安装不需要 `allowBuilds` 那道构建授权。）
 
 卸载 `dsh plugin --profile web remove dsh-aloof`，profile 的 `bundles` 列表会自动摘掉这一层。
-
-**私有部署必须先改 `baseUrl`**，见「配」——这一行填的是哪台，你的令牌就发给哪台。
 
 ## 工具
 
@@ -73,7 +73,15 @@ dsh plugin --profile web add 'github:gaochonggeng/dsh-aloof#<commit-sha>'
 
 ## 票据：用「dsh 接入令牌」，不要用登录票
 
-在 Aloof 里点左下角自己的名字 → **dsh 接入** → 生成一张。明文只显示一次，当场抄走。
+在 Aloof 里点左下角自己的名字 → **dsh 接入** → 生成一张。复制出来的是这么一整串：
+
+```
+alf_kQ3xN…7Bv@https://aloof.你的公司.com
+```
+
+前半截是密钥，`@` 后面是这台 Aloof 的地址（就是你访问它用的那个地址）。**明文只显示一次，当场抄走**；丢了不要紧，回来吊销掉再生成一张。
+
+为什么把地址塞进票里：这样 dsh 那头只有一个东西要配。地址和票各自是一个可填字段时，「填串了、票发到别处去」就永远可能发生；合成一串之后这件事在物理上就不成立了。
 
 为什么不直接把网页的登录票复制过来：那张票带着这个人的**全部**权限、三十天有效、没法单独作废——放在笔记本上被捞走的人能替他批审批。接入令牌反过来长：
 
@@ -94,13 +102,14 @@ dsh plugin --profile web add 'github:gaochonggeng/dsh-aloof#<commit-sha>'
 
 ## 配
 
-默认值在包自带的 `cordis.patch.yml` 里。**不要改那个文件**（升级会覆盖），要改就在 profile 自己的 `cordis.patch.yml` 里按 id 覆盖。patch 是**整块替换** `config` 而不是深合并，所以覆盖时四个键要写全：
+**正常情况下什么都不用配**——地址跟着票来，装完粘一串票就能用。下面这些是给需要拧的人看的。
+
+默认值在包自带的 `cordis.patch.yml` 里。**不要改那个文件**（升级会覆盖），要改就在 profile 自己的 `cordis.patch.yml` 里按 id 覆盖。patch 是**整块替换** `config` 而不是深合并，所以覆盖时键要写全：
 
 ```yaml
 - id: aloof
   name: 'dsh-aloof'
   config:
-    baseUrl: https://aloof.你的公司.com
     tokenEnv: ALOOF_TOKEN
     timeoutMs: 20000
     requireApproval: true
@@ -108,20 +117,24 @@ dsh plugin --profile web add 'github:gaochonggeng/dsh-aloof#<commit-sha>'
 
 | 键 | 说明 |
 |---|---|
-| `baseUrl` | 你那台 Aloof 的地址。**没有隐式默认值**：漏写会当场报错，而不是悄悄连到别人的服务器上 |
 | `tokenEnv` | 令牌的**引用名**（POSIX 标识符），不是令牌本身 |
 | `timeoutMs` | 单次 HTTP 超时 |
 | `requireApproval` | 写操作是否必须先问人。`true` = fail closed |
+| `baseUrl` | **默认没有这一项，通常也不该加。** 填了就以它为准（盖掉票里带的地址） |
 
-令牌的值走 dsh 的 credentials（进程环境变量或 `$DSH_HOME/.credentials.yaml`），配置里只留引用名——这样配置可以随便同步、随便渲染到界面上，换令牌也不用碰文件，而且**每次调用现取不缓存**，换完下一次请求就生效。
+`baseUrl` 只有一种情形该填：**网页地址和 dsh 能到达的地址确实不是同一个**——反向代理、内外网双入口，网页在 `https://aloof.corp.com`，而你的 dsh 只能走 `http://10.0.0.5:8000`。除此之外填它只是给自己留一个填错的机会，而包里之所以不带这一项，是因为一旦带了具体域名，装完没改的人的票就会发到那个域名去（那边只会回 401，但票已经出网了）。
+
+令牌的值走 dsh 的 credentials（进程环境变量或 `$DSH_HOME/.credentials.yaml`），配置里只留引用名——这样配置可以随便同步、随便渲染到界面上，换令牌也不用碰文件，而且**每次调用现取不缓存**，换完（甚至换成另一家公司的实例）下一次请求就生效，不用重启 dsh。
+
+票里带不带地址，取决于**发票的那台 Aloof**（是它的网页拼上去的），和插件版本无关。老票不带 `@`，还能用，但得自己在 `baseUrl` 里补地址——去网页上重新生成一张就不用管了。
 
 ## 团队里多个人一起用
 
 一人一张票，各自在自己机器上生成，互不相干。想在**同一台机器上模拟多个人**（测试、或者一台共用的机器），靠 `DSH_HOME` 隔开就行——profile、插件、凭据全在那个目录里：
 
 ```sh
-DSH_HOME=~/.dsh-alice ALOOF_TOKEN='alf_甲的票' dsh web --port 3081
-DSH_HOME=~/.dsh-bob   ALOOF_TOKEN='alf_乙的票' dsh web --port 3082
+DSH_HOME=~/.dsh-alice ALOOF_TOKEN='alf_甲的票@https://aloof.你的公司.com' dsh web --port 3081
+DSH_HOME=~/.dsh-bob   ALOOF_TOKEN='alf_乙的票@https://aloof.你的公司.com' dsh web --port 3082
 ```
 
 两边搜到的资料库内容按各自账号的空间权限算，写进去的东西对方立刻搜得到——**共享的是同一份，不是各存一份**。

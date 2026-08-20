@@ -30,15 +30,36 @@ export const inject = ['tools']
 /**
  * 配置缺省值。cordis 行里没给的键落到这儿，别让插件因为少一行 YAML 就崩。
  *
- * **`baseUrl` 故意不给默认值**：patch 是整块替换 config 而不是深合并，用户为了改
- * `tokenEnv` 重写这一行时很容易漏掉 `baseUrl`；要是这里兜一个我们的域名，他的
- * 令牌就会静悄悄发到别人的服务器上（那边只会回 401，但票已经出网了）。
- * 宁可当场报错让他补上——见 apply 里的检查。
+ * **`baseUrl` 不在这儿，而且正常情况下根本不用配**：地址跟着票一起来（见 `split`）。
+ * 这里要是兜一个我们的域名，别家用户的令牌就会静悄悄发到我们的服务器上——那边只会回
+ * 401，但票已经出网了。真需要写死时（反向代理、内网另有入口）配置里还能填，填了以它为准。
  */
 const DEFAULTS = {
   tokenEnv: 'ALOOF_TOKEN',
   timeoutMs: 20000,
   requireApproval: true,
+}
+
+/**
+ * 把 Aloof 复制给你的那一整串票拆成「密钥」和「发给哪台」。
+ *
+ * 复制出来的形状是 `alf_xxxx@https://你那台`——**密钥和它该去的地址绑在一起**。
+ * 这么设计是为了消掉一整类错误：地址和票各自是一个可填的字段时，「填串了、票发到别人
+ * 服务器上」就永远可能发生；合成一个字符串之后，这件事在物理上就不成立了。
+ * 顺带 dsh 那头也简单了——粘一串，不用再配第二个东西。
+ *
+ * 切法没有歧义：后端的密钥是 `secrets.token_urlsafe` 生成的，字母表 `[A-Za-z0-9_-]`，
+ * **永远不含 `@`**，所以从第一个 `@` 切开就对。
+ *
+ * 票带不带地址取决于**发票的那台 Aloof**（是它的网页拼上去的），跟插件版本无关。
+ * 老票不带 `@`，这时 `carried` 是 null，退回配置里的 `baseUrl`。
+ * @param {string} raw 凭据里存的那一整串
+ * @returns {{secret:string, carried:string|null}} 密钥 + 票自带的地址（没带就是 null）
+ */
+function split(raw) {
+  const at = raw.indexOf('@')
+  if (at < 0) return { secret: raw, carried: null }
+  return { secret: raw.slice(0, at), carried: raw.slice(at + 1).trim().replace(/\/+$/, '') }
 }
 
 /** 凭据引用名的合法形状，和 dsh 的 `credentialRef` 一致（POSIX 标识符）。 */
@@ -141,19 +162,24 @@ function clip(text) {
 
 export function apply(ctx, config) {
   const conf = { ...DEFAULTS, ...(config ?? {}) }
-  if (typeof conf.baseUrl !== 'string' || conf.baseUrl.trim() === '') {
-    throw new Error('aloof: 没配 baseUrl —— 填你那台 Aloof 的地址（如 https://aloof.你的公司.com）。patch 是整块替换 config，覆盖时这个键要一起写')
-  }
-  const base = conf.baseUrl.trim().replace(/\/+$/, '')
+  /**
+   * 配置里写死的地址。**平常是空的**——地址跟着票来。
+   * 填了就以它为准（而不是票里那个）：反向代理、内网另有入口时，网页的地址和 dsh 能到达的
+   * 地址确实可能不是同一个，这是留给那种情形的手动覆盖口子。显式配置优先于内嵌缺省。
+   */
+  const pinned = typeof conf.baseUrl === 'string' && conf.baseUrl.trim() !== ''
+    ? conf.baseUrl.trim().replace(/\/+$/, '')
+    : null
   const ref = String(conf.tokenEnv)
   if (!REF_PATTERN.test(ref)) {
     throw new Error(`aloof: tokenEnv "${ref}" 不是合法的凭据引用名（需匹配 ${REF_PATTERN}）`)
   }
 
   /**
-   * 取票据。**该放的是「dsh 接入令牌」**（`alf_` 开头，在 Aloof 里点左下角自己的名字 →
-   * 「dsh 接入」生成），不是网页的登录票：登录票带着这个人的全部权限、没法单独作废，
-   * 放在笔记本上被捞走的人能替他批审批。接入令牌只能查数据和提单，能按设备吊销。
+   * 取票据。**该放的是「dsh 接入令牌」**（形如 `alf_xxxx@https://你那台`，在 Aloof 里点
+   * 左下角自己的名字 → 「dsh 接入」生成，整串复制），不是网页的登录票：登录票带着这个人的
+   * 全部权限、没法单独作废，放在笔记本上被捞走的人能替他批审批。接入令牌只能读数据、提审批单、
+   * 改资料库内容，批审批做不了，而且能按设备吊销。
    *
    * 优先走 dsh 的 credentials 服务（它把进程环境变量叠在 `$DSH_HOME/.credentials.yaml`
    * 之上，还能被设置页写入）；这套服务不在时退回读环境变量，让插件在裸装配里也能用。
@@ -169,7 +195,7 @@ export function apply(ctx, config) {
     }
     const ambient = process.env[ref]
     if (ambient) return ambient
-    throw new Error(`没配 ${ref}：在 Aloof 里生成一张 dsh 接入令牌（左下角自己的名字 → dsh 接入），放进环境变量 ${ref}，或写进 $DSH_HOME/.credentials.yaml`)
+    throw new Error(`没配 ${ref}：在 Aloof 里生成一张 dsh 接入令牌（左下角自己的名字 → dsh 接入），把复制出来的**整串**（alf_xxxx@https://你那台）放进环境变量 ${ref}，或写进 $DSH_HOME/.credentials.yaml`)
   }
 
   /**
@@ -179,6 +205,15 @@ export function apply(ctx, config) {
    * @param {{query?:Record<string,any>,body?:any,signal?:AbortSignal}} [options] 附加项
    */
   async function api(method, path, options = {}) {
+    // 地址每次现算：票换了（换了公司、换了实例）下一次请求就打到新的那台，不用重启 dsh。
+    const { secret, carried } = split(await token())
+    const base = pinned ?? carried
+    if (base === null) {
+      throw new Error(`${ref} 里那串票不带地址，配置里也没写 baseUrl。去 Aloof 里重新复制一次——复制出来的是「alf_xxxx@https://你那台」一整串，@ 后面那截就是地址，别只粘前半截`)
+    }
+    if (!/^https?:\/\//.test(base)) {
+      throw new Error(`地址 "${base}" 不像个网址（要带 http:// 或 https://）。它来自${pinned === null ? ` ${ref} 里 @ 后面那截` : '配置里的 baseUrl'}`)
+    }
     const url = new URL(base + path)
     for (const [key, value] of Object.entries(options.query ?? {})) {
       if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value))
@@ -193,7 +228,7 @@ export function apply(ctx, config) {
         method,
         signal,
         headers: {
-          authorization: `Bearer ${await token()}`,
+          authorization: `Bearer ${secret}`,
           ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
         },
         ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),

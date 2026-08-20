@@ -1,6 +1,6 @@
 {
   "name": "dsh-aloof",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "把 Aloof 的团队资料库和办公审批接成 DeepSeek Harness 的原生工具：搜团队知识、读写共享文档、查审批待办、发起单子。写操作先过 dsh 的审批闸门。",
   "keywords": [
     "dsh",
