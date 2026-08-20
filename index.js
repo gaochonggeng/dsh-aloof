@@ -1,9 +1,13 @@
 /**
- * Aloof 办公审批（OA）→ DeepSeek Harness 原生工具。
+ * Aloof（办公审批 + 团队资料库）→ DeepSeek Harness 原生工具。
  *
- * 五个工具：查我的待办、看我能发起哪些审批、读某个模板要填什么、发起一单、同意或驳回。
+ * 两组工具。**办公审批**：查我的待办、看我能发起哪些审批、读某个模板要填什么、发起一单、
+ * 同意或驳回。**团队资料库**：列空间、搜、列目录、读一份、写一份、删一个——这组是
+ * 「团队共享知识」落到本机 dsh 上的通路，你在网页上看得到的那些空间，这里同一套权限
+ * （空间 ACL 照旧生效，你在网页上进不去的空间，拿这张票一样进不去）。
+ *
  * 读操作直连 Aloof 后端；**写操作先过 dsh 的审批闸门**（`ctx.approval`）——模型不能
- * 悄悄替人按下「同意」。
+ * 悄悄替人按下「同意」，也不能悄悄覆写或删掉团队的资料。
  *
  * 为什么整份文件没有一句 import：
  * dsh 的 `defineTool` / `credentialRef` / `installSettingsSection` 都在
@@ -120,6 +124,21 @@ function page(body, limit) {
   return { items, total, shown: items.length, truncated: total > items.length, limit }
 }
 
+/**
+ * 一次最多把多少字正文塞回模型。
+ *
+ * 资料库里躺着几十万字的文档是常态，整篇灌回去会把上下文一次吃光（后面几轮全废）。
+ * 截断**必须说出来**：返回里带 `truncated`，不然模型会拿半篇当全文去下结论。
+ */
+const TEXT_CAP = 40000
+
+function clip(text) {
+  const full = typeof text === 'string' ? text : ''
+  return full.length <= TEXT_CAP
+    ? { text: full, chars: full.length, truncated: false }
+    : { text: full.slice(0, TEXT_CAP), chars: full.length, truncated: true }
+}
+
 export function apply(ctx, config) {
   const conf = { ...DEFAULTS, ...(config ?? {}) }
   if (typeof conf.baseUrl !== 'string' || conf.baseUrl.trim() === '') {
@@ -155,7 +174,7 @@ export function apply(ctx, config) {
 
   /**
    * 一次 Aloof API 调用。
-   * @param {'GET'|'POST'} method HTTP 方法
+   * @param {'GET'|'POST'|'PUT'|'DELETE'} method HTTP 方法
    * @param {string} path 形如 `/api/oa/tasks/todo`
    * @param {{query?:Record<string,any>,body?:any,signal?:AbortSignal}} [options] 附加项
    */
@@ -404,6 +423,290 @@ export function apply(ctx, config) {
           signal: exec.signal,
         })
         return { instanceId: body.id, title: body.title, status: body.status, decision: args.decision }
+      },
+    }),
+
+    // ── 团队资料库 ─────────────────────────────────────────────────────────
+    // 「共享」在这儿是**同一份**，不是各存一份：写进去的东西同事在网页上立刻看得见，
+    // 同事写的这里也搜得到。所以每个写操作的确认文案都要说清「这是团队看得见的」。
+
+    tool({
+      name: 'kb_spaces',
+      description:
+        '列出我在 Aloof 资料库里能进的空间（个人空间 + 被拉进去的团队空间）。'
+        + '要搜、要读、要写之前先用它拿 spaceId。myRole 是我在这个空间的角色：'
+        + 'viewer 只能读，member 能写，admin 还能删目录。',
+      parameters: {},
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            items: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            total: { type: 'integer' },
+          },
+        },
+        render: (_args, value) => [{
+          type: 'text',
+          text: value.total === 0
+            ? '一个空间都没有（可能是 work.kb:view 权限没开）。'
+            : value.items.map(s =>
+              `- [spaceId=${s.id}] ${s.name}（${s.kind === 'personal' ? '个人' : '团队'}，我是 ${s.myRole}，${s.docCount} 份资料）`
+              + `${s.summary ? ` —— ${s.summary}` : ''}`,
+            ).join('\n'),
+        }],
+      },
+      async execute(_args, exec) {
+        // 这个端点直接回数组（不是 {items,total}）：空间数量本来就是个位数，没分页
+        const body = await api('GET', '/api/work/kb/spaces', { signal: exec.signal })
+        const items = Array.isArray(body) ? body : []
+        return { items, total: items.length }
+      },
+    }),
+
+    tool({
+      name: 'kb_search',
+      description:
+        '在团队资料库里搜（按名字、用途说明和正文全文）。**要用团队已有的结论时先搜这里，'
+        + '别自己从头编**——同事写过的方案、报价、踩过的坑都在里面。'
+        + '返回每条命中的 spaceId + nodeId（拿去 kb_read 读全文）、它在哪个目录下、以及命中的那一句。'
+        + '总数看 total，不要把返回条数当全部。',
+      parameters: {
+        keyword: { type: 'string', required: true, description: '搜什么，支持中文；一次一个主题词效果最好' },
+        spaceId: { type: 'integer', description: '只搜某个空间，来自 kb_spaces；留空是搜我能进的全部' },
+        limit: { type: 'integer', description: '最多返回几条，1~100，默认 10' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            items: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            total: { type: 'integer' },
+            shown: { type: 'integer' },
+            truncated: { type: 'boolean' },
+          },
+        },
+        render: (args, value) => [{
+          type: 'text',
+          text: value.total === 0
+            ? `资料库里搜不到「${args.keyword}」。`
+            : `命中 ${value.total} 条，列出 ${value.shown} 条：\n`
+              + value.items.map(h =>
+                `- [spaceId=${h.spaceId} nodeId=${h.id}] ${h.name}（${h.spaceName} / ${h.pathText}）`
+                + `${h.snippet ? `\n    …${h.snippet}…` : ''}`,
+              ).join('\n'),
+        }],
+      },
+      async execute(args, exec) {
+        const limit = Math.min(Math.max(args.limit ?? 10, 1), 100)
+        // 后端这几个 query 参数是 snake_case，名字对不上会**静默不过滤**（不报错，只是搜了全库）
+        const body = await api('GET', '/api/work/kb/search', {
+          query: { keyword: args.keyword, space_id: args.spaceId, limit, offset: 0 },
+          signal: exec.signal,
+        })
+        return page(body, limit)
+      },
+    }),
+
+    tool({
+      name: 'kb_list',
+      description:
+        '列一个空间某个目录下的一层（目录排在文件前面）。用来摸清结构、或给 kb_write 挑一个 parentId。'
+        + '不给 folderId 就是列空间根。想按内容找东西用 kb_search，别一层层翻。',
+      parameters: {
+        spaceId: { type: 'integer', required: true, description: '空间 id，来自 kb_spaces' },
+        folderId: { type: 'integer', description: '列哪个目录下的一层；留空 = 空间根' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            items: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            total: { type: 'integer' },
+            path: { type: 'string' },
+          },
+        },
+        render: (_args, value) => [{
+          type: 'text',
+          text: `${value.path || '根目录'}：`
+            + (value.total === 0
+              ? '空的。'
+              : `\n${value.items.map(n =>
+                n.kind === 'folder'
+                  ? `- [folderId=${n.id}] ${n.name}/（${n.childCount} 项）`
+                  : `- [nodeId=${n.id}] ${n.name}${n.note ? ` —— ${n.note}` : ''}`,
+              ).join('\n')}`),
+        }],
+      },
+      async execute(args, exec) {
+        const body = await api('GET', `/api/work/kb/spaces/${args.spaceId}/nodes`, {
+          query: { parent_id: args.folderId },
+          signal: exec.signal,
+        })
+        return {
+          items: Array.isArray(body?.items) ? body.items : [],
+          total: body?.total ?? 0,
+          path: (body?.crumbs ?? []).map(c => c.name).join(' / '),
+        }
+      },
+    }),
+
+    tool({
+      name: 'kb_read',
+      description:
+        '读资料库里一份资料的全文。nodeId 来自 kb_search 或 kb_list。'
+        + '正文很长时会截断并在 truncated 里说明——那种情况别把它当全文下结论。'
+        + '写操作要改哪一份，也先用它读一遍再改。',
+      parameters: {
+        spaceId: { type: 'integer', required: true, description: '空间 id' },
+        nodeId: { type: 'integer', required: true, description: '资料 id，来自 kb_search / kb_list' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            name: { type: 'string' },
+            text: { type: 'string' },
+            chars: { type: 'integer' },
+            truncated: { type: 'boolean' },
+            readable: { type: 'boolean' },
+          },
+        },
+        render: (_args, value) => [{
+          type: 'text',
+          text: value.readable === false
+            ? `「${value.name}」是${value.why}，正文读不出来。在 Aloof 网页里打开看吧。`
+            : `「${value.name}」（${value.chars} 字${value.truncated ? `，只给前 ${TEXT_CAP} 字` : ''}）：\n\n${value.text}`,
+        }],
+      },
+      async execute(args, exec) {
+        const doc = await api('GET', `/api/work/kb/spaces/${args.spaceId}/docs/${args.nodeId}`, {
+          signal: exec.signal,
+        })
+        const name = doc?.node?.name ?? '这份资料'
+        // Word / Excel / PPT 走的是另一套编辑接口，按文本读只会读出一堆压缩包乱码；
+        // 图片 / PDF 同理。**宁可明说读不了，也别把乱码当正文回给模型**——它会照着乱码瞎猜。
+        if (doc?.officeKind) {
+          return { name, readable: false, why: `一份 ${doc.officeKind}（Office 文件）`, text: '', chars: 0, truncated: false }
+        }
+        if (doc?.editable === false) {
+          return { name, readable: false, why: '二进制文件（图片 / PDF 之类）', text: '', chars: 0, truncated: false }
+        }
+        return { name, readable: true, rev: doc?.rev ?? null, ...clip(doc?.text) }
+      },
+    }),
+
+    tool({
+      name: 'kb_write',
+      description:
+        '往团队资料库写一份文档。不给 nodeId = 新建（name 要带后缀，只能 .md / .csv / .html / .txt / .json）；'
+        + '给了 nodeId = 改那一份，mode=append 追加到末尾（默认），mode=replace 整篇覆盖。'
+        + '**这是团队共享的地方，同事在网页上立刻看得见**，所以一定会先向人确认。'
+        + '版本号（rev）由插件自己处理，别自己编；如果这中间有人改过同一份，后端会拒，那时重新读一遍再写。',
+      parameters: {
+        spaceId: { type: 'integer', required: true, description: '写到哪个空间，来自 kb_spaces（要 member 以上）' },
+        text: { type: 'string', required: true, description: '正文（Markdown）' },
+        nodeId: { type: 'integer', description: '改哪一份；留空 = 新建' },
+        name: { type: 'string', description: '新建时的文件名，要带后缀，如「电价踩坑记.md」' },
+        parentId: { type: 'integer', description: '新建时放在哪个目录下，来自 kb_list；留空 = 空间根' },
+        note: { type: 'string', description: '新建时的一句用途说明，方便同事以后搜到' },
+        mode: { type: 'string', enum: ['append', 'replace'], description: '改已有文档时：append 追加（默认）/ replace 覆盖' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            spaceId: { type: 'integer' },
+            nodeId: { type: 'integer' },
+            name: { type: 'string' },
+            created: { type: 'boolean' },
+            mode: { type: 'string' },
+          },
+        },
+        render: (_args, value) => [{
+          type: 'text',
+          text: value.created
+            ? `已新建「${value.name}」（nodeId=${value.nodeId}），同事现在就能在资料库里看到。`
+            : `已${value.mode === 'replace' ? '覆写' : '追加到'}「${value.name}」（nodeId=${value.nodeId}）。`,
+        }],
+      },
+      async execute(args, exec) {
+        const spaceId = args.spaceId
+        if (args.nodeId === undefined || args.nodeId === null) {
+          if (!args.name) throw new Error('新建文档要给 name（带后缀，如「电价踩坑记.md」）；要改已有的那份就给 nodeId')
+          await allowed('kb_write', `在资料库空间 ${spaceId} 新建团队可见的「${args.name}」（${args.text.length} 字）`, exec)
+          const node = await api('POST', `/api/work/kb/spaces/${spaceId}/docs`, {
+            body: {
+              name: args.name,
+              content: args.text,
+              ...(args.parentId === undefined ? {} : { parentId: args.parentId }),
+              ...(args.note === undefined ? {} : { note: args.note }),
+            },
+            signal: exec.signal,
+          })
+          return { spaceId, nodeId: node.id, name: node.name, created: true, mode: 'create' }
+        }
+
+        // 先读一遍：一是拿 rev（乐观锁的版本号，让模型编这个数迟早覆盖掉别人的修改），
+        // 二是 append 要拼在旧正文后面，三是确认文案里能报出「多少字 → 多少字」。
+        const mode = args.mode === 'replace' ? 'replace' : 'append'
+        const doc = await api('GET', `/api/work/kb/spaces/${spaceId}/docs/${args.nodeId}`, { signal: exec.signal })
+        if (doc?.officeKind) throw new Error(`「${doc.node.name}」是 Office 文件，这个工具改不了；在 Aloof 网页里编辑`)
+        const old = typeof doc?.text === 'string' ? doc.text : ''
+        // 追加前补一个空行：直接接上去会和上一段黏成一段，Markdown 里那是同一个段落
+        const next = mode === 'replace' ? args.text : `${old}${old.endsWith('\n') ? '' : '\n'}\n${args.text}`
+        const word = mode === 'replace' ? `整篇覆盖（原 ${old.length} 字 → 新 ${args.text.length} 字，原文会没了）` : `追加 ${args.text.length} 字`
+        await allowed('kb_write', `改团队资料「${doc.node.name}」：${word}`, exec)
+        const saved = await api('PUT', `/api/work/kb/spaces/${spaceId}/docs/${args.nodeId}`, {
+          body: { text: next, rev: doc.rev },
+          signal: exec.signal,
+        })
+        return { spaceId, nodeId: saved.node.id, name: saved.node.name, created: false, mode }
+      },
+    }),
+
+    tool({
+      name: 'kb_delete',
+      description:
+        '删掉资料库里的一个文件或目录。**删了找不回来，没有回收站**；删目录连里面所有东西一起走。'
+        + '一定会先向人确认。人不同意就不会删。删目录还要空间管理员权限。',
+      parameters: {
+        spaceId: { type: 'integer', required: true, description: '空间 id' },
+        nodeId: { type: 'integer', required: true, description: '要删的文件或目录 id' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: { spaceId: { type: 'integer' }, nodeId: { type: 'integer' }, name: { type: 'string' } },
+        },
+        render: (_args, value) => [{ type: 'text', text: `已删掉「${value.name}」。这个动作找不回来了。` }],
+      },
+      async execute(args, exec) {
+        // 确认文案里的「删的是什么」必须从服务端问出来，不能让模型自己报——它报错了，
+        // 人就是在给一句假话点同意。先按目录探，404 再按文件探（列目录端点对文件回 404）。
+        let what = null
+        try {
+          const dir = await api('GET', `/api/work/kb/spaces/${args.spaceId}/nodes`, {
+            query: { parent_id: args.nodeId },
+            signal: exec.signal,
+          })
+          const here = (dir?.crumbs ?? []).at(-1)
+          what = { name: here?.name ?? `节点 ${args.nodeId}`, kind: 'folder', children: dir?.total ?? 0 }
+        } catch {
+          const doc = await api('GET', `/api/work/kb/spaces/${args.spaceId}/docs/${args.nodeId}`, { signal: exec.signal })
+          what = { name: doc?.node?.name ?? `节点 ${args.nodeId}`, kind: 'file', children: 0 }
+        }
+        const reason = what.kind === 'folder'
+          ? `删掉团队资料库里的目录「${what.name}」，底下直接挂着 ${what.children} 项（子目录里的一并删掉）。删了找不回来`
+          : `删掉团队资料库里的「${what.name}」。删了找不回来`
+        await allowed('kb_delete', reason, exec)
+        await api('DELETE', `/api/work/kb/spaces/${args.spaceId}/nodes/${args.nodeId}`, { signal: exec.signal })
+        return { spaceId: args.spaceId, nodeId: args.nodeId, name: what.name }
       },
     }),
   ]

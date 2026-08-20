@@ -28,6 +28,6 @@
         tokenEnv: ALOOF_TOKEN
         # 单次 HTTP 超时（毫秒）。
         timeoutMs: 20000
-        # 写操作（发起审批 / 同意 / 驳回）是否必须先问人。
+        # 写操作（写 / 删资料库内容、发起审批、同意 / 驳回）是否必须先问人。
         # true = fail closed：没有可用的审批答复方就直接拒绝，不会静默放行。
         requireApproval: true
